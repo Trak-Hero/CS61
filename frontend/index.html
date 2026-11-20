@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dorm Temperature Voting</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; background: #fff; color: #222; }
+  header, form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  fieldset { margin: 12px 0; border: 1px solid #ccc; border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+  th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+  #msg { padding: 8px; border-radius: 4px; display: none; }
+  #msg.err { display: block; background: #fdd; } #msg.ok { display: block; background: #dfd; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1>Dorm Temperature Voting</h1>
+<header>
+  <label>Role <select id="role" onchange="switchRole()">
+    <option value="student">Student</option><option value="admin">ResOps Admin</option><option value="logger">Temp Logger</option>
+  </select></label>
+  <label>Student ID <input id="sid" size="8" onchange="loadBuildings()"></label>
+  <label><input type="checkbox" id="bypass" onchange="setBypass()"> Bypass client checks (test database checks)</label>
+</header>
+<div id="msg"></div>
+
+<section id="student">
+  <fieldset><legend>Building</legend>
+    <select class="bsel" id="sbld" onchange="loadBuilding()"></select>
+    <div id="binfo"></div>
+  </fieldset>
+  <fieldset><legend>My vote</legend>
+    <form id="voteForm" onsubmit="return submit_(event, vote)">
+      <span id="winfo">Select a building.</span>
+      <input id="vtemp" type="number" step="0.5" required placeholder="°F">
+      <button id="vbtn" disabled>Submit vote</button>
+    </form>
+  </fieldset>
+  <fieldset><legend>History</legend>
+    <button onclick="history_('temperature/history')">Temperature history</button>
+    <button onclick="history_('recommendations')">Recommendation history</button>
+    <button onclick="history_('windows')">Voting windows</button>
+    <div id="hist"></div>
+  </fieldset>
+</section>
+
+<section id="admin" class="hidden">
+  <fieldset><legend>Voting windows</legend>
+    <button onclick="loadWindows()">Refresh</button>
+    <div id="wins"></div>
+    <form onsubmit="return submit_(event, f => api('POST', '/admin/windows', {building_id: +f.b.value, start_time: dt(f.s.value), end_time: dt(f.e.value)}).then(loadWindows))">
+      <b>New window:</b> <select name="b" class="bsel"></select>
+      start <input name="s" type="datetime-local" required> end <input name="e" type="datetime-local" required>
+      <button>Create</button>
+    </form>
+  </fieldset>
+  <fieldset><legend>Buildings</legend>
+    <form onsubmit="return submit_(event, f => api('POST', '/admin/buildings', {building_name: f.n.value, building_type: f.t.value, min_temp: num(f.lo.value), max_temp: num(f.hi.value)}).then(loadBuildings))">
+      <b>Add:</b> <input name="n" placeholder="Name" required>
+      <select name="t"><option>DORM</option><option>PUBLIC</option></select>
+      min <input name="lo" type="number" step="0.5" min="60" max="80" value="66" required>
+      max <input name="hi" type="number" step="0.5" min="60" max="80" value="74" required>
+      <button>Add building</button>
+    </form>
+    <form onsubmit="return submit_(event, f => api('PATCH', '/admin/buildings/' + f.b.value, {min_temp: num(f.lo.value), max_temp: num(f.hi.value)}).then(loadBuildings))">
+      <b>Edit range:</b> <select name="b" class="bsel"></select>
+      min <input name="lo" type="number" step="0.5" min="60" max="80" required>
+      max <input name="hi" type="number" step="0.5" min="60" max="80" required>
+      <button>Save</button>
+    </form>
+  </fieldset>
+  <fieldset><legend>Students</legend>
+    <form onsubmit="return submit_(event, f => api('PATCH', '/admin/students/' + f.id.value, {is_active: f.a.value === '1'}))">
+      Student ID <input name="id" required size="8">
+      <select name="a"><option value="1">Activate</option><option value="0">Deactivate</option></select>
+      <button>Apply</button>
+    </form>
+  </fieldset>
+</section>
+
+<section id="logger" class="hidden">
+  <fieldset><legend>Log a temperature reading</legend>
+    <form onsubmit="return submit_(event, f => api('POST', '/logger/temperatures', {building_id: +f.b.value, temperature_f: num(f.t.value), recorded_at: dt(f.r.value)}))">
+      <select name="b" class="bsel"></select>
+      <input name="t" type="number" step="0.1" min="30" max="100" placeholder="°F" required>
+      <input name="r" id="logtime" type="datetime-local" step="1" required>
+      <button>Insert reading</button>
+    </form>
+  </fieldset>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+let buildings = [], activeWindow = null, myVote = null;
+
+async function api(method, path, body) {
+  const headers = { 'Content-Type': 'application/json', 'X-Role': $('role').value };
+  if ($('sid').value.trim()) headers['X-Student-Id'] = $('sid').value.trim();
+  const r = await fetch('/api' + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  let data = {}; try { data = await r.json(); } catch {}
+  if (!r.ok) throw Object.assign(new Error(data.error || data.message || `HTTP ${r.status}`), { status: r.status });
+  return data;
+}
+const list = d => Array.isArray(d) ? d : (Object.values(d || {}).find(Array.isArray) || []);       
+const one = d => (d && !Array.isArray(d) && Object.keys(d).length === 1 && typeof Object.values(d)[0] === 'object') ? Object.values(d)[0] : d;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const num = v => v.trim() === '' ? null : (isNaN(+v) ? v : +v); 
+const dt = v => v ? v.replace('T', ' ') + (v.length === 16 ? ':00' : '') : null; 
+const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 19); };
+const msg = (text, ok) => { $('msg').textContent = text; $('msg').className = ok ? 'ok' : 'err'; };
+const table = (rows, extra) => !rows.length ? '<p>None.</p>' : '<table><tr>' + Object.keys(rows[0]).map(k => `<th>${esc(k)}</th>`).join('') + (extra ? '<th></th>' : '') + '</tr>' +
+  rows.map(r => '<tr>' + Object.values(r).map(v => `<td>${esc(v)}</td>`).join('') + (extra ? `<td>${extra(r)}</td>` : '') + '</tr>').join('') + '</table>';
+
+function submit_(e, fn) {           
+  e.preventDefault();
+  fn(e.target).then(() => msg('Saved.', true)).catch(err => msg(err.message));
+  return false;
+}
+function setBypass() {              
+  const off = $('bypass').checked;
+  document.querySelectorAll('form').forEach(f => f.noValidate = off);
+  document.querySelectorAll('input[step]:not([type=datetime-local])').forEach(i => i.type = off ? 'text' : 'number'); // lets junk text through
+}
+function switchRole() {
+  ['student', 'admin', 'logger'].forEach(r => $(r).classList.toggle('hidden', r !== $('role').value));
+  $('msg').className = '';
+  loadBuildings();
+  if ($('role').value === 'admin') loadWindows();
+  $('logtime').value = nowLocal();
+}
+
+async function loadBuildings() {
+  try { buildings = list(await api('GET', '/buildings')); } catch (e) { buildings = []; msg(e.message); }
+  const opts = buildings.map(b => `<option value="${esc(b.building_id)}">${esc(b.building_name)} (${esc(b.building_type)})</option>`).join('');
+  document.querySelectorAll('.bsel').forEach(s => { const v = s.value; s.innerHTML = opts; if (v) s.value = v; });
+  if ($('role').value === 'student') loadBuilding();
+}
+
+async function loadBuilding() {
+  const id = $('sbld').value; activeWindow = myVote = null; $('hist').innerHTML = '';
+  $('vbtn').disabled = true; $('vtemp').value = ''; $('winfo').textContent = id ? 'Loading…' : 'No buildings available.';
+  if (!id) return $('binfo').innerHTML = '';
+  const get = p => api('GET', `/buildings/${id}` + p).then(one).catch(() => null);
+  const [b, t, w, rec] = await Promise.all([get(''), get('/temperature'), get('/windows/active'), get('/recommendations/latest')]);
+  $('binfo').innerHTML = `<p>Allowed range: <b>${esc(b?.min_temp)}–${esc(b?.max_temp)} °F</b> ·
+    Latest reading: <b>${t ? esc(t.temperature_f) + ' °F</b> at ' + esc(t.recorded_at) : 'none</b>'}</p>
+    <p>Latest recommendation: ${rec ? `<b>${esc(rec.direction)}</b> (median ${esc(rec.median_temp ?? '–')} °F vs logged ${esc(rec.logged_temp ?? '–')} °F, ${esc(rec.vote_count)} votes, ${esc(rec.computed_at)})` : 'none yet'}</p>`;
+  $('vtemp').min = b?.min_temp ?? 60; $('vtemp').max = b?.max_temp ?? 80;
+  activeWindow = w?.window_id ? w : null;
+  if (!activeWindow) return $('winfo').textContent = 'No open voting window for this building.';
+  myVote = await api('GET', `/windows/${activeWindow.window_id}/my_vote`).then(one).catch(() => null);
+  if (myVote && myVote.requested_temp == null) myVote = null; 
+  $('winfo').textContent = `Window #${activeWindow.window_id} open until ${activeWindow.end_time}. ` + (myVote ? `Your vote: ${myVote.requested_temp} °F.` : 'You have not voted.');
+  $('vtemp').value = myVote?.requested_temp ?? '';
+  $('vbtn').textContent = myVote ? 'Update vote' : 'Submit vote';
+  $('vbtn').disabled = false;
+}
+async function vote() {
+  await api(myVote ? 'PUT' : 'POST', `/windows/${activeWindow.window_id}/vote`, { requested_temp: num($('vtemp').value) });
+  await loadBuilding();
+}
+async function history_(p) {
+  try { $('hist').innerHTML = table(list(await api('GET', `/buildings/${$('sbld').value}/${p}`))); }
+  catch (e) { msg(e.message); }
+}
+
+async function loadWindows() {
+  try {
+    $('wins').innerHTML = table(list(await api('GET', '/admin/windows')),
+      w => w.status === 'closed' ? `<button onclick="showRec(${+w.window_id})">Result</button>` : `<button onclick="closeWin(${+w.window_id})">Close &amp; compute</button>`);
+  } catch (e) { msg(e.message); }
+}
+async function closeWin(id) {
+  try { await api('POST', `/admin/windows/${id}/close`); await loadWindows(); await showRec(id); } catch (e) { msg(e.message); }
+}
+async function showRec(id) {
+  try { const r = one(await api('GET', `/windows/${id}/recommendation`));
+    msg(`Window #${id}: ${r.direction} — median ${r.median_temp ?? '–'} °F, logged ${r.logged_temp ?? '–'} °F, ${r.vote_count} votes`, true);
+  } catch (e) { msg(e.message); }
+}
+
+switchRole();
+</script>
+</body>
+</html>
