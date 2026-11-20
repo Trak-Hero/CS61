@@ -132,6 +132,7 @@ function switchRole() {
 }
 
 async function loadBuildings() {
+  if ($('role').value === 'student' && !$('sid').value.trim()) return msg('Enter your student ID to see your buildings.', true);
   try { buildings = list(await api('GET', '/buildings')); } catch (e) { buildings = []; msg(e.message); }
   const opts = buildings.map(b => `<option value="${esc(b.building_id)}">${esc(b.building_name)} (${esc(b.building_type)})</option>`).join('');
   document.querySelectorAll('.bsel').forEach(s => { const v = s.value; s.innerHTML = opts; if (v) s.value = v; });
@@ -169,14 +170,14 @@ async function history_(p) {
 async function loadWindows() {
   try {
     $('wins').innerHTML = table(list(await api('GET', '/admin/windows')),
-      w => w.status === 'closed' ? `<button onclick="showRec(${+w.window_id})">Result</button>` : `<button onclick="closeWin(${+w.window_id})">Close &amp; compute</button>`);
+      w => w.status === 'closed' ? `<button onclick="showRec(${+w.window_id})">Result</button>` : w.status === 'scheduled' ? '' : `<button onclick="closeWin(${+w.window_id})">Close &amp; compute</button>`);
   } catch (e) { msg(e.message); }
 }
 async function closeWin(id) {
-  try { await api('POST', `/admin/windows/${id}/close`); await loadWindows(); await showRec(id); } catch (e) { msg(e.message); }
+  try { const r = await api('POST', `/admin/windows/${id}/close`); await loadWindows(); await showRec(id, r); } catch (e) { msg(e.message); }
 }
-async function showRec(id) {
-  try { const r = one(await api('GET', `/windows/${id}/recommendation`));
+async function showRec(id, r) {
+  try { r = r || one(await api('GET', `/windows/${id}/recommendation`));
     msg(`Window #${id}: ${r.direction} — median ${r.median_temp ?? '–'} °F, logged ${r.logged_temp ?? '–'} °F, ${r.vote_count} votes`, true);
   } catch (e) { msg(e.message); }
 }
