@@ -107,7 +107,7 @@ const list = d => Array.isArray(d) ? d : (Object.values(d || {}).find(Array.isAr
 const one = d => (d && !Array.isArray(d) && Object.keys(d).length === 1 && typeof Object.values(d)[0] === 'object') ? Object.values(d)[0] : d;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const num = v => v.trim() === '' ? null : (isNaN(+v) ? v : +v); 
-const dt = v => v ? v.replace('T', ' ') + (v.length === 16 ? ':00' : '') : null; 
+const dt = v => v ? new Date(v).toISOString() : null;
 const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 19); };
 const msg = (text, ok) => { $('msg').textContent = text; $('msg').className = ok ? 'ok' : 'err'; };
 const table = (rows, extra) => !rows.length ? '<p>None.</p>' : '<table><tr>' + Object.keys(rows[0]).map(k => `<th>${esc(k)}</th>`).join('') + (extra ? '<th></th>' : '') + '</tr>' +
