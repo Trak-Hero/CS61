@@ -2,9 +2,11 @@
 import os
 from flask import Flask, jsonify
 from trak_routes import trak_bp
+from baila_routes import baila_bp
 
 app = Flask(__name__)
 app.register_blueprint(trak_bp)
+app.register_blueprint(baila_bp)
 
 @app.get('/api/health')
 def health():

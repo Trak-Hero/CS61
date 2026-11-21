@@ -41,3 +41,12 @@ DATA INTEGRITY TO RMB
 - Building temperature limits must satisfy min_temp < max_temp.
 - Voting windows must satisfy start_time < end_time.
 - Student dorm assignments must reference DORM buildings --> this validation belongs in student assignment operations.
+
+SETUP (fresh database)
+- mysql < database/schema.sql   (drops and rebuilds CS61_Project, wipes test data)
+- mysql < database/seed.sql     (Trak's demo data: closed, open, ended and scheduled windows)
+- cd backend && python app.py
+- python test_voting.py         (41 checks, run on a freshly seeded DB)
+
+TIME
+- All DATETIMEs are stored and compared in UTC.
