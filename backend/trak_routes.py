@@ -103,7 +103,7 @@ def student_identity():
 # Check student access to a building.
 def has_access(cur, student_id, building_id):
     cur.execute('''
-        SELETCT 1 FROM Students s
+        SELECT 1 FROM Students s
         WHERE s.student_id = %s AND s.is_active = 1
             AND (s.dorm_building_id = %s OR EXISTS (
             SELECT 1 FROM Student_Access a
@@ -190,6 +190,9 @@ def execute_handler(fn):
         except Error as exc:
             if conn:
                 conn.rollback()
+            # A trigger SIGNAL (errno 1644) is a business-rule rejection, not a crash.
+            if exc.errno == 1644:
+                return error(exc.msg, 409)
             import traceback
             print(f"MYSQL ERROR: {exc}", flush=True)
             traceback.print_exc()
