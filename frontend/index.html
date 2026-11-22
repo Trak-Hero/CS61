@@ -111,7 +111,8 @@ const num = v => v.trim() === '' ? null : (isNaN(+v) ? v : +v);
 const dt = v => v ? new Date(v).toISOString() : null;
 const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 19); };
 const msg = (text, ok) => { $('msg').textContent = text; $('msg').className = ok ? 'ok' : 'err'; };
-const table = (rows, extra) => !rows.length ? '<p>None.</p>' : '<table><tr>' + Object.keys(rows[0]).map(k => `<th>${esc(k)}</th>`).join('') + (extra ? '<th></th>' : '') + '</tr>' +
+const named = r => Object.fromEntries(Object.entries(r).flatMap(([k, v]) => k === 'building_id' && !('building_name' in r) ? [[k, v], ['building_name', buildings.find(b => b.building_id == v)?.building_name ?? '']] : [[k, v]])); // add name after id
+const table = (raw, extra, rows = raw.map(named)) => !rows.length ? '<p>None.</p>' : '<table><tr>' + Object.keys(rows[0]).map(k => `<th>${esc(k)}</th>`).join('') + (extra ? '<th></th>' : '') + '</tr>' +
   rows.map(r => '<tr>' + Object.values(r).map(v => `<td>${esc(v)}</td>`).join('') + (extra ? `<td>${extra(r)}</td>` : '') + '</tr>').join('') + '</table>';
 
 function submit_(e, fn) {           
