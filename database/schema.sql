@@ -150,6 +150,16 @@ BEGIN
   END IF;
 END$$
 
+-- Prevent updates to Student_Access from duplicating student's existing dorm access.
+CREATE TRIGGER trg_access_bu
+BEFORE UPDATE ON Student_Access
+FOR EACH ROW
+BEGIN
+    IF EXISTS (SELECT 1 FROM Students WHERE student_id = NEW.student_id AND dorm_building_id = NEW.building_id) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Dorm access already implied. DO NOT add it to Student_Access';
+    END IF;
+END$$
+
 -- Feedback item: tie every vote to access. Also enforce active student,
 -- open window, and the building's own temperature range.
 CREATE TRIGGER trg_votes_bi BEFORE INSERT ON Votes FOR EACH ROW
@@ -187,8 +197,10 @@ BEGIN
   END IF;
 END$$
 
+-- Prevent unauthorized vote updates, including after building access is revoked.
 CREATE TRIGGER trg_votes_bu BEFORE UPDATE ON Votes FOR EACH ROW
 BEGIN
+  DECLARE v_building INT;
   DECLARE v_start DATETIME;
   DECLARE v_end DATETIME;
   DECLARE v_min DECIMAL(4,1);
@@ -198,19 +210,44 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A vote cannot move to another student or window';
   END IF;
 
-  SELECT w.start_time, w.end_time, b.min_temp, b.max_temp
-    INTO v_start, v_end, v_min, v_max
-  FROM Voting_Windows w JOIN Buildings b ON b.building_id = w.building_id
+  SELECT w.building_id, w.start_time, w.end_time, b.min_temp, b.max_temp
+    INTO v_building, v_start, v_end, v_min, v_max
+  FROM Voting_Windows w
+  JOIN Buildings b ON b.building_id = w.building_id
   WHERE w.window_id = NEW.window_id;
 
-  IF NOT EXISTS (SELECT 1 FROM Students WHERE student_id = NEW.student_id AND is_active = 1) THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM Students
+    WHERE student_id = NEW.student_id AND is_active = 1
+  ) THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Student is not active';
   END IF;
+
+  -- Reject vote updates if student no longer has building access.
+  IF NOT EXISTS (
+    SELECT 1 FROM Students s
+    WHERE s.student_id = NEW.student_id
+      AND (
+        s.dorm_building_id = v_building
+        OR EXISTS (
+          SELECT 1 FROM Student_Access a
+          WHERE a.student_id = s.student_id
+            AND a.building_id = v_building
+        )
+      )
+  ) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Student has no access to this building';
+  END IF;
+
   IF NEW.requested_temp < v_min OR NEW.requested_temp > v_max THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Requested temperature is outside the building range';
   END IF;
+
   IF UTC_TIMESTAMP() < v_start OR UTC_TIMESTAMP() >= v_end
-     OR EXISTS (SELECT 1 FROM Recommendations WHERE window_id = NEW.window_id) THEN
+     OR EXISTS (
+       SELECT 1 FROM Recommendations
+       WHERE window_id = NEW.window_id
+     ) THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Voting window is not open';
   END IF;
 END$$

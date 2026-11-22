@@ -1,4 +1,4 @@
--- Demo seed (Trak). Run after schema.sql.
+-- seed (Trak). Run after schema.sql.
 -- @seed_mode lets the historical votes into windows that already ended.
 -- The vote trigger blocks that for normal app traffic.
 SET @seed_mode = 1;

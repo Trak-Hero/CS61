@@ -17,6 +17,7 @@ from db import get_connection
 
 trak_bp = Blueprint("trak", __name__)
 
+# convert Decimal and datetime into JSON useable formats.
 def jsonable(value):
     if isinstance(value, Decimal):
         return float(value)
@@ -28,23 +29,25 @@ def jsonable(value):
         return [jsonable(v) for v in value]
     return value
 
+# returns JSON response with HTTP status code.
 def respond(obj, status=200):
     return jsonify(jsonable(obj)), status
-
+# returns JSON error message with HTTP status code.
 def error(message, code=400):
     return jsonify({"error": message}), code
-
+# retrieve and validate request as a JSON object.
 def payload():
     obj = request.get_json(silent=True)
     if not isinstance(obj, dict):
         raise ValueError('Expected a JSON object')
     return obj
-
+# chcek that an identifier is a positive integer.
 def positive_id(value, field='id'):
     if isinstance(value, bool) or not re.fullmatch(r'[1-9]\d*',str(value)):
         raise ValueError(f'{field} must be a positive integer')
     return int(value)
 
+# check that a temperature is a finite decimal with at most 1 decimal place.
 def decimal_temp(value, field='temperature_f'):
     if isinstance(value, bool) or value is None:
         raise ValueError(f'{field} must be a number')
@@ -57,7 +60,7 @@ def decimal_temp(value, field='temperature_f'):
     if number != number.quantize(Decimal('0.1')):
         raise ValueError(f'{field} may have at most 1 decimal place')
     return number
-
+# parse a datetime string and normalize timezone to UTC.
 def parse_dt(value, field, *, optional=False):
     if value is None and optional:
         return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
@@ -67,19 +70,21 @@ def parse_dt(value, field, *, optional=False):
         dt = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
     except ValueError:
         raise ValueError(f'{field} must be YYYY-MM-DD HH:MM:SS') from None
-    # for demo: naive front-end datetime-local fields are interpreted literally, not converted
+    # for demo: frontend datetime-local fields are interpreted literally, not converted
     # for team note: use a single timezone convention!!!
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt.replace(microsecond=0)
 
+# Check if the request's role matches an allowed role.
 def role_is(*roles):
-    # for classroom demo only. Browser user can freely impersonate roles.
+    # !!! FOR CLASSROOM DEMO ONLY. Browser user can freely impersonate roles.
     return request.headers.get('X-Role', '').lower() in roles
-
+# decorator to restricts endpoint access to specified roles.
 def require_role(*roles):
     def decorate(fn):
         @wraps(fn)
+        # check the request's role before running that protected function.
         def wrapped(*args, **kwargs):
             if not role_is(*roles):
                 return error('Role not permitted (classroom demo only)', 403)
@@ -87,7 +92,7 @@ def require_role(*roles):
         return wrapped
     return decorate
 
-
+# extract and validate student ID given in the request header.
 def student_identity():
     if not role_is('student'):
         return None
@@ -100,7 +105,7 @@ def student_identity():
 # CHECK ACCESS PORTION
 # ----------------------
 
-# Check student access to a building.
+# Check if an ACTIVE student has access through their dorm or additional permissions.
 def has_access(cur, student_id, building_id):
     cur.execute('''
         SELECT 1 FROM Students s
@@ -112,7 +117,7 @@ def has_access(cur, student_id, building_id):
     ''', (student_id, building_id, building_id))
     return cur.fetchone() is not None
 
-
+# Retrieve a building + verify the requesting role or student may access it.
 def building_access(cur, building_id):
     cur.execute('SELECT * FROM Buildings WHERE building_id = %s', (building_id,))
     building = cur.fetchone()
@@ -127,41 +132,8 @@ def building_access(cur, building_id):
         return None, error('Not authorized to access this building', 403)
     return building, None
 
-
-## connection lifecycle and rollback on errors.
-'''
+# manage the db connections, transactions, and error handling for API requests.
 def execute_handler(fn):
-    @wraps(fn)
-    def wrapped(*args, **kwargs):
-        conn = None
-        try:
-            conn = get_connection()
-            with conn.cursor(dictionary=True) as cur:
-                result = fn(cur, conn, *args, **kwargs)
-            return result
-        except ValueError as exc:
-            if conn: conn.rollback()
-            return error(str(exc), 400)
-        except IntegrityError as exc:
-            if conn: conn.rollback()
-            if exc.errno == 1062:
-                return error('A record with these unique fields already exists', 409)
-            if exc.errno in (1451, 1452):
-                return error('Foreign key constraint violation', 400)
-            if exc.errno == 3819:
-                return error('CHECK constraint violation', 400)
-            return error('Database integrity constraint violation', 400)
-        except Error:
-            if conn: conn.rollback()
-            # note to team --> We will not expose raw database/credentials errors to API callers.
-            return error('Database error. check backend terminal', 500)
-        finally:
-            if conn: conn.close()
-    return wrapped
-'''
-# TEMP VERSION FOR DEBUGGING
-def execute_handler(fn):
-    """Centralize connection lifecycle and rollback on errors."""
     @wraps(fn)
     def wrapped(*args, **kwargs):
         conn = None
@@ -190,7 +162,6 @@ def execute_handler(fn):
         except Error as exc:
             if conn:
                 conn.rollback()
-            # A trigger SIGNAL (errno 1644) is a business-rule rejection, not a crash.
             if exc.errno == 1644:
                 return error(exc.msg, 409)
             import traceback
@@ -202,9 +173,6 @@ def execute_handler(fn):
                 conn.close()
     return wrapped
 
-
-
-
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
 # BUILDING DATA-----------------------------------------------------
@@ -212,6 +180,7 @@ def execute_handler(fn):
 # ------------------------------------------------------------------
 
 # GET: LIST BUILDINGS
+# Returns ALL buildings for admins and loggers OR ONLY authorized buildings for students.
 @trak_bp.get('/api/buildings')
 @execute_handler
 def list_buildings(cur, conn):
@@ -238,7 +207,9 @@ def list_buildings(cur, conn):
             ORDER BY b.building_name
         ''', (sid,))
     return respond(cur.fetchall())
+
 # GET BUILDING BY ID
+# Retrieve a building's info after checking access permissions.
 @trak_bp.get('/api/buildings/<int:building_id>')
 @execute_handler
 def get_building(cur, conn, building_id):
@@ -246,6 +217,7 @@ def get_building(cur, conn, building_id):
     return failure if failure is not None else respond(building)
 
 # GET BUILDING TEMPEARTURE BY BUILDING ID
+# Retrieve the most recent logged temp for an authorized building.
 @trak_bp.get('/api/buildings/<int:building_id>/temperature')
 @execute_handler
 def get_latest_temperature(cur, conn, building_id):
@@ -260,6 +232,7 @@ def get_latest_temperature(cur, conn, building_id):
     return respond(reading) if reading else error('No temperature readings yet', 404)
 
 # GET BUILDING TEMPERAUTRE HISTORY BY BUILDING ID
+# Returns a building's tempe history, limited to a validated # of records.
 @trak_bp.get('/api/buildings/<int:building_id>/temperature/history')
 @execute_handler
 def get_temperature_history(cur, conn, building_id):
@@ -283,6 +256,7 @@ def get_temperature_history(cur, conn, building_id):
 # ------------------------------------------------------------------
 
 # CREATE VOTING WINDOW
+# Create a voting window AFTER checking its building, timestamps, and overlapping periods.
 @trak_bp.post('/api/admin/windows')
 @require_role('admin')
 @execute_handler
@@ -310,6 +284,7 @@ def create_window(cur, conn):
     return respond({'window_id': wid, 'building_id': bid, 'start_time': start, 'end_time': end}, 201)
 
 # LIST THE WINDOWS
+# Retrieve ALL voting windows with their current status and recommendation info.
 @trak_bp.get('/api/admin/windows')
 @require_role('admin')
 @execute_handler
@@ -327,6 +302,7 @@ def list_windows(cur, conn):
     return respond(cur.fetchall()) 
 
 # CLOSE VOTING WINDOW
+# Close a voting window, then calc the median requested temp, and save its recommendation.
 @trak_bp.post('/api/admin/windows/<int:window_id>/close')
 @require_role('admin')
 @execute_handler
@@ -383,6 +359,7 @@ def close_window(cur, conn, window_id):
 
 
 # SET STUDENT ACTIVE STATUS
+# Activate or deactivate a student through an admin request.
 @trak_bp.patch('/api/admin/students/<int:student_id>')
 @require_role('admin')
 @execute_handler
@@ -398,6 +375,7 @@ def set_student_active(cur, conn, student_id):
     return respond({'student_id': student_id, 'is_active': active})
 
 # CREATE NEW BUILDINGS
+# Create a building after checking its name, type, and allowed temperature range.
 @trak_bp.post('/api/admin/buildings')
 @require_role('admin')
 @execute_handler
@@ -422,6 +400,7 @@ def create_building(cur, conn):
                     'building_type': btype, 'min_temp': lower, 'max_temp': upper}, 201)
 
 # EDIT BUILDINGS
+# Update a building's min or max temp after validating the new range.
 @trak_bp.patch('/api/admin/buildings/<int:building_id>')
 @require_role('admin')
 @execute_handler
@@ -449,6 +428,7 @@ def edit_building(cur, conn, building_id):
 # ------------------------------------------------------------------
 
 # INSERT A SIMULATED TEMPERATURE LOG
+# Insert a sim temp reading for an existing building with its timestamp.
 @trak_bp.post('/api/logger/temperatures')
 @require_role('logger', 'admin')
 @execute_handler
