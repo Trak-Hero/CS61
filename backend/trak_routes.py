@@ -190,6 +190,9 @@ def execute_handler(fn):
         except Error as exc:
             if conn:
                 conn.rollback()
+            # A trigger SIGNAL (errno 1644) is a business-rule rejection, not a crash.
+            if exc.errno == 1644:
+                return error(exc.msg, 409)
             import traceback
             print(f"MYSQL ERROR: {exc}", flush=True)
             traceback.print_exc()
